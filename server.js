@@ -48,6 +48,31 @@ function extractFsId(details) {
   return null;
 }
 
+async function looksLikeUsableDirectUrl(url) {
+  if (!url) return false;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { Range: 'bytes=0-0' },
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    const okStatus = res.status === 200 || res.status === 206;
+    const seemsBinary = contentType && !contentType.includes('text/html') && !contentType.includes('application/json');
+
+    return okStatus && seemsBinary;
+  } catch {
+    return false;
+  }
+}
+
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'terabox-uploader' });
 });
@@ -86,17 +111,28 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
     const filePath = details?.path || `${remoteDir}/${safeOriginalName}`;
 
-    // Preferir link de compartilhamento (mais estável para acesso externo)
-    let url = null;
+    // 1) Tentar link direto
+    let directUrl = null;
     try {
-      const short = await client.generateShortUrl(filePath, Number(fsId));
-      url = short?.shortUrl || null;
+      const dl = await client.downloadFile(fsId);
+      directUrl = dl?.downloadLink || dl?.link || dl?.dlink || null;
     } catch {}
 
-    // Fallback para dlink direto (pode exigir contexto de sessão)
-    if (!url) {
-      const dl = await client.downloadFile(fsId);
-      url = dl?.downloadLink || dl?.link || dl?.dlink || null;
+    // 2) Tentar link de compartilhamento
+    let shareUrl = null;
+    try {
+      const short = await client.generateShortUrl(filePath, Number(fsId));
+      shareUrl = short?.shortUrl || null;
+    } catch {}
+
+    // 3) Escolher melhor URL: direto válido > compartilhamento > direto sem validação
+    let url = null;
+    if (await looksLikeUsableDirectUrl(directUrl)) {
+      url = directUrl;
+    } else if (shareUrl) {
+      url = shareUrl;
+    } else {
+      url = directUrl;
     }
 
     if (!url) {
@@ -106,6 +142,8 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     return res.json({
       ok: true,
       url,
+      directUrl,
+      shareUrl,
       storagePath: filePath,
       fsId,
     });
