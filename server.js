@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
 import fs from 'node:fs';
+import path from 'node:path';
 import os from 'node:os';
 import dotenv from 'dotenv';
 import { createRequire } from 'node:module';
@@ -62,9 +63,15 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
   const remoteDir = req.body?.remoteDir || '/multitracks';
 
+  // Preserva nome/extensão original para o TeraBox (multer usa nome temporário sem extensão)
+  const safeOriginalName = path.basename(req.file.originalname || 'upload.bin').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const uploadPath = path.join(os.tmpdir(), `${Date.now()}-${safeOriginalName}`);
+
   try {
+    fs.copyFileSync(req.file.path, uploadPath);
+
     const client = getClient();
-    const uploadResult = await client.uploadFile(req.file.path, null, remoteDir);
+    const uploadResult = await client.uploadFile(uploadPath, null, remoteDir);
 
     if (!uploadResult?.success) {
       return res.status(500).json({ error: uploadResult?.message || 'upload failed' });
@@ -87,13 +94,14 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     return res.json({
       ok: true,
       url,
-      storagePath: details?.path || `${remoteDir}/${req.file.originalname}`,
+      storagePath: details?.path || `${remoteDir}/${safeOriginalName}`,
       fsId,
     });
   } catch (e) {
     return res.status(500).json({ error: String(e?.message || e) });
   } finally {
     try { fs.unlinkSync(req.file.path); } catch {}
+    try { fs.unlinkSync(uploadPath); } catch {}
   }
 });
 
