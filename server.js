@@ -84,8 +84,20 @@ app.post('/upload', upload.single('file'), async (req, res) => {
       return res.status(500).json({ error: 'missing fs_id in upload response', raw: details });
     }
 
-    const dl = await client.downloadFile(fsId);
-    const url = dl?.downloadLink || dl?.link || dl?.dlink || null;
+    const filePath = details?.path || `${remoteDir}/${safeOriginalName}`;
+
+    // Preferir link de compartilhamento (mais estável para acesso externo)
+    let url = null;
+    try {
+      const short = await client.generateShortUrl(filePath, Number(fsId));
+      url = short?.shortUrl || null;
+    } catch {}
+
+    // Fallback para dlink direto (pode exigir contexto de sessão)
+    if (!url) {
+      const dl = await client.downloadFile(fsId);
+      url = dl?.downloadLink || dl?.link || dl?.dlink || null;
+    }
 
     if (!url) {
       return res.status(500).json({ error: 'missing download url' });
@@ -94,7 +106,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     return res.json({
       ok: true,
       url,
-      storagePath: details?.path || `${remoteDir}/${safeOriginalName}`,
+      storagePath: filePath,
       fsId,
     });
   } catch (e) {
